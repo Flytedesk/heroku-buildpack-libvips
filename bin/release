@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# bin/release <build-dir>
+
+cat <<EOF
+---
+config_vars:
+  PATH: /app/vendor/libvips/bin:\$PATH
+  LD_LIBRARY_PATH: /app/vendor/libvips/lib:\$LD_LIBRARY_PATH
+  PKG_CONFIG_PATH: /app/vendor/libvips/lib/pkgconfig:\$PKG_CONFIG_PATH
+EOF

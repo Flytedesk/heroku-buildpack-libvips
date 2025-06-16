@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# bin/detect <build-dir>
+
+# This buildpack is always applicable if explicitly added
+echo "libvips"
+exit 0
