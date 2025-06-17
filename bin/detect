@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # bin/detect <build-dir>
 
-# This buildpack is always applicable if explicitly added
-echo "libvips"
-exit 0
+SUPPORTED_STACKS=(heroku-24)
+
+for stack_option in "${SUPPORTED_STACKS[@]}"; do
+	if [[ $STACK = $stack_option ]]; then
+		echo "libvips ($stack_option stack)"
+		exit 0
+	fi
+done
+
+echo "libvips buildpack only supports heroku-24 stack" && exit 1

@@ -2,255 +2,298 @@
 # bin/compile <build-dir> <cache-dir> <env-dir>
 
 set -e
-set -o pipefail
 
 BUILD_DIR=$1
 CACHE_DIR=$2
 ENV_DIR=$3
 
-# Export environment variables
-export_env_dir() {
-	local env_dir=$1
-	if [ -d "$env_dir" ]; then
-		for e in $(ls $env_dir); do
-			export "$e=$(cat $env_dir/$e)"
-		done
-	fi
-}
+LP_DIR=$(
+	cd $(dirname $0)
+	cd ..
+	pwd
+)
 
-export_env_dir $ENV_DIR
-
-# Set versions - you can override these with environment variables
+# Default versions - can be overridden via environment variables
 LIBHEIF_VERSION=${LIBHEIF_VERSION:-1.19.8}
 LIBVIPS_VERSION=${LIBVIPS_VERSION:-8.17.0}
 
-# Set up directories
-VENDOR_DIR="$BUILD_DIR/vendor"
-INSTALL_DIR="$VENDOR_DIR/libvips"
-mkdir -p $INSTALL_DIR
-mkdir -p $CACHE_DIR
-
-# Detect architecture for library paths
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-	LIB_ARCH="x86_64-linux-gnu"
-elif [ "$ARCH" = "aarch64" ]; then
-	LIB_ARCH="aarch64-linux-gnu"
-else
-	LIB_ARCH=""
+# Get version from environment variable (for backward compatibility)
+if [ -f $ENV_DIR/VIPS_VERSION ]; then
+	LIBVIPS_VERSION=$(cat $ENV_DIR/VIPS_VERSION)
 fi
 
-# Set build flags with rpath
-export CPPFLAGS="-I$INSTALL_DIR/include"
-export CFLAGS="-I$INSTALL_DIR/include"
-export LDFLAGS="-L$INSTALL_DIR/lib -L$INSTALL_DIR/lib/$LIB_ARCH -Wl,-rpath,$INSTALL_DIR/lib -Wl,-rpath,$INSTALL_DIR/lib/$LIB_ARCH"
-export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:$INSTALL_DIR/lib/$LIB_ARCH/pkgconfig:$PKG_CONFIG_PATH"
-export PATH="$INSTALL_DIR/bin:$PATH"
+# Use source compilation flag - defaults to trying pre-built first
+COMPILE_FROM_SOURCE=${COMPILE_FROM_SOURCE:-false}
+if [ -f $ENV_DIR/COMPILE_FROM_SOURCE ]; then
+	COMPILE_FROM_SOURCE=$(cat $ENV_DIR/COMPILE_FROM_SOURCE)
+fi
 
-indent() {
-	sed -u 's/^/       /'
+function topic() {
+	echo "-----> libvips: $*"
 }
 
-echo "-----> Installing libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION"
+function message() {
+	echo "       libvips: $*"
+}
 
-# Check for required dependencies and set up environment
-echo "-----> Checking system dependencies and setting up environment"
+# Installation directory
+INSTALL_PREFIX="$BUILD_DIR/vendor/libvips"
+vendor="$INSTALL_PREFIX"
+bundle="$CACHE_DIR/libvips/$LIBVIPS_VERSION"
 
-# If APT buildpack was used, set up paths
-if [ -d "/app/.apt" ]; then
-	export PATH="/app/.apt/usr/bin:$PATH"
-	export LD_LIBRARY_PATH="/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/aarch64-linux-gnu:/app/.apt/usr/lib:$LD_LIBRARY_PATH"
-	export LIBRARY_PATH="/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/aarch64-linux-gnu:/app/.apt/usr/lib:$LIBRARY_PATH"
-	export INCLUDE_PATH="/app/.apt/usr/include:$INCLUDE_PATH"
-	export CPATH="/app/.apt/usr/include:$CPATH"
-	export CPPFLAGS="-I/app/.apt/usr/include $CPPFLAGS"
-	export LDFLAGS="-L/app/.apt/usr/lib/x86_64-linux-gnu -L/app/.apt/usr/lib/aarch64-linux-gnu -L/app/.apt/usr/lib $LDFLAGS"
-	export CMAKE_PREFIX_PATH="/app/.apt/usr"
-	export CMAKE_MODULE_PATH="/app/.apt/usr/share/cmake-3.28/Modules"
-	export PKG_CONFIG_PATH="/app/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:/app/.apt/usr/lib/aarch64-linux-gnu/pkgconfig:/app/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
-fi
+# Detect architecture
+ARCH=$(dpkg --print-architecture)
+case "$ARCH" in
+amd64)
+	LIB_ARCH_DIR="x86_64-linux-gnu"
+	;;
+arm64)
+	LIB_ARCH_DIR="aarch64-linux-gnu"
+	;;
+*)
+	message "Unsupported architecture: $ARCH, falling back to source compilation"
+	COMPILE_FROM_SOURCE=true
+	;;
+esac
 
-# Similar check for build environment
-if [ -d "$BUILD_DIR/.apt" ]; then
-	export PATH="$BUILD_DIR/.apt/usr/bin:$PATH"
-	export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu:$BUILD_DIR/.apt/usr/lib:$LD_LIBRARY_PATH"
-	export LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu:$BUILD_DIR/.apt/usr/lib:$LIBRARY_PATH"
-	export INCLUDE_PATH="$BUILD_DIR/.apt/usr/include:$INCLUDE_PATH"
-	export CPATH="$BUILD_DIR/.apt/usr/include:$CPATH"
-	export CPPFLAGS="-I$BUILD_DIR/.apt/usr/include $CPPFLAGS"
-	export LDFLAGS="-L$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu -L$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu -L$BUILD_DIR/.apt/usr/lib $LDFLAGS"
-	export CMAKE_PREFIX_PATH="$BUILD_DIR/.apt/usr"
-	export CMAKE_MODULE_PATH="$BUILD_DIR/.apt/usr/share/cmake-3.28/Modules"
-	export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
-fi
+# GitHub releases URL for pre-built binaries
+RELEASES_URL="https://github.com/YOUR_USERNAME/heroku-buildpack-libvips/releases/download"
 
-missing_deps=()
-
-for dep in cmake meson ninja patchelf pkg-config gcc; do
-	if ! command -v "$dep" >/dev/null 2>&1; then
-		missing_deps+=("$dep")
+function cached() {
+	if [[ ! -d $bundle ]]; then
+		return 1
 	fi
-done
 
-if [ ${#missing_deps[@]} -ne 0 ]; then
-	echo "       ERROR: Missing required dependencies: ${missing_deps[*]}" | indent
-	echo "       Please add heroku-community/apt buildpack with an Aptfile containing:" | indent
-	echo "       build-essential, pkg-config, cmake, meson, ninja-build, patchelf" | indent
-	echo "       and other required development libraries." | indent
+	if [ -f "$bundle/.stack" ]; then
+		CACHED_STACK=$(cat $bundle/.stack)
+	fi
+
+	if [ -f "$bundle/.version" ]; then
+		CACHED_VERSION=$(cat $bundle/.version)
+	fi
+
+	# True when cached version matches requested version and stack
+	[[ $CACHED_STACK == $STACK && $CACHED_VERSION == $LIBVIPS_VERSION ]]
+}
+
+function download_prebuilt() {
+	set +e
+
+	url="${RELEASES_URL}/v${LIBVIPS_VERSION}/${STACK}-${ARCH}.tar.gz"
+	message "Attempting to download pre-built binary from $url"
+
+	status=$(curl -sL -f -w "%{http_code}" -o /tmp/libvips.tar.gz $url)
+
+	if [[ $status -ge 300 ]]; then
+		message "Pre-built binary not available (HTTP $status), falling back to source compilation"
+		set -e
+		return 1
+	fi
+
+	set -e
+
+	message "Extracting pre-built libvips $LIBVIPS_VERSION"
+	mkdir -p $bundle
+	tar -xz -f /tmp/libvips.tar.gz -C $bundle
+
+	# Store metadata
+	echo "$STACK" >"$bundle/.stack"
+	echo "$LIBVIPS_VERSION" >"$bundle/.version"
+
+	return 0
+}
+
+function compile_from_source() {
+	message "Compiling libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION from source"
+
+	# Set up directory structure
+	mkdir -p "$INSTALL_PREFIX"/{bin,lib,include,share}
+	mkdir -p "$CACHE_DIR/downloads"
+	mkdir -p "$INSTALL_PREFIX/lib/$LIB_ARCH_DIR"
+
+	# Set up environment for building with APT buildpack dependencies
+	export CMAKE_PREFIX_PATH="$BUILD_DIR/.apt/usr:$INSTALL_PREFIX"
+	export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/$LIB_ARCH_DIR/pkgconfig:$BUILD_DIR/.apt/usr/share/pkgconfig:$INSTALL_PREFIX/lib/$LIB_ARCH_DIR/pkgconfig:$INSTALL_PREFIX/lib/pkgconfig"
+	export PATH="$BUILD_DIR/.apt/usr/bin:$INSTALL_PREFIX/bin:$PATH"
+	export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib:$BUILD_DIR/.apt/usr/lib/$LIB_ARCH_DIR:$INSTALL_PREFIX/lib:$INSTALL_PREFIX/lib/$LIB_ARCH_DIR"
+	export CMAKE_MODULE_PATH="$BUILD_DIR/.apt/usr/share/cmake-3.28/Modules:$BUILD_DIR/.apt/usr/share/cmake/Modules"
+	export CMAKE_SYSTEM_PREFIX_PATH="$BUILD_DIR/.apt/usr:$INSTALL_PREFIX"
+	export CMAKE_FIND_ROOT_PATH="$BUILD_DIR/.apt/usr:$INSTALL_PREFIX"
+
+	# Verify dependencies
+	for tool in cmake meson ninja pkg-config patchelf; do
+		if ! command -v "$tool" >/dev/null 2>&1; then
+			message "ERROR: $tool not found. Make sure apt buildpack is configured with required dependencies."
+			exit 1
+		fi
+	done
+
+	# Download and extract function
+	download_and_extract() {
+		local url="$1"
+		local filename="$2"
+		local extract_dir="$3"
+
+		if [ ! -f "$CACHE_DIR/downloads/$filename" ]; then
+			message "Downloading $filename..."
+			curl -L "$url" -o "$CACHE_DIR/downloads/$filename"
+		else
+			message "Using cached $filename"
+		fi
+
+		if [[ "$filename" == *.tar.xz ]]; then
+			tar -xf "$CACHE_DIR/downloads/$filename" -C "$extract_dir" --strip-components=1
+		elif [[ "$filename" == *.tar.gz ]]; then
+			tar -xzf "$CACHE_DIR/downloads/$filename" -C "$extract_dir" --strip-components=1
+		fi
+	}
+
+	# Build libheif
+	message "Building libheif $LIBHEIF_VERSION"
+	LIBHEIF_BUILD_DIR=$(mktemp -d)
+	cd "$LIBHEIF_BUILD_DIR"
+
+	LIBHEIF_URL="https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz"
+	download_and_extract "$LIBHEIF_URL" "libheif-${LIBHEIF_VERSION}.tar.gz" "$LIBHEIF_BUILD_DIR"
+
+	mkdir -p build && cd build
+	cmake .. \
+		-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+		-DCMAKE_MODULE_PATH="$CMAKE_MODULE_PATH" \
+		-DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
+		-DCMAKE_INSTALL_LIBDIR="lib/$LIB_ARCH_DIR" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DWITH_EXAMPLES=OFF \
+		-DWITH_LIBDE265=ON \
+		-DWITH_X265=ON \
+		-DWITH_AOM=ON \
+		-DWITH_DAV1D=ON \
+		-DBUILD_SHARED_LIBS=ON
+
+	make -j$(nproc) && make install
+
+	# Build libvips
+	message "Building libvips $LIBVIPS_VERSION"
+	LIBVIPS_BUILD_DIR=$(mktemp -d)
+	cd "$LIBVIPS_BUILD_DIR"
+
+	LIBVIPS_URL="https://github.com/libvips/libvips/releases/download/v${LIBVIPS_VERSION}/vips-${LIBVIPS_VERSION}.tar.xz"
+	download_and_extract "$LIBVIPS_URL" "vips-${LIBVIPS_VERSION}.tar.xz" "$LIBVIPS_BUILD_DIR"
+
+	export PKG_CONFIG_PATH="$INSTALL_PREFIX/lib/$LIB_ARCH_DIR/pkgconfig:$PKG_CONFIG_PATH"
+
+	meson setup builddir \
+		--prefix="$INSTALL_PREFIX" \
+		--libdir="lib/$LIB_ARCH_DIR" \
+		--buildtype=release \
+		-Dintrospection=disabled \
+		-Dmodules=disabled \
+		-Dcgif=enabled \
+		-Dheif=enabled \
+		-Djpeg=enabled \
+		-Dpng=enabled \
+		-Dtiff=enabled \
+		-Dwebp=enabled
+
+	meson compile -C builddir
+	meson install -C builddir
+
+	# Set RUNPATH for libraries and binaries
+	for lib in "$INSTALL_PREFIX"/lib/"$LIB_ARCH_DIR"/lib{vips,heif}*.so*; do
+		if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+			patchelf --set-rpath "\$ORIGIN:/app/vendor/libvips/lib:/app/vendor/libvips/lib/$LIB_ARCH_DIR" "$lib"
+		fi
+	done
+
+	for bin in "$INSTALL_PREFIX"/bin/vips*; do
+		if [ -f "$bin" ] && [ ! -L "$bin" ]; then
+			patchelf --set-rpath "/app/vendor/libvips/lib:/app/vendor/libvips/lib/$LIB_ARCH_DIR" "$bin"
+		fi
+	done
+
+	# Create version info and cache the build
+	cat >"$INSTALL_PREFIX/VERSION" <<EOF
+libvips: $LIBVIPS_VERSION
+libheif: $LIBHEIF_VERSION
+architecture: $ARCH
+build_date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+build_method: source_compilation
+EOF
+
+	# Cache the compiled result
+	if [ ! -d "$bundle" ]; then
+		mkdir -p "$bundle"
+		cp -r "$INSTALL_PREFIX"/* "$bundle/"
+		echo "$STACK" >"$bundle/.stack"
+		echo "$LIBVIPS_VERSION" >"$bundle/.version"
+	fi
+
+	# Cleanup
+	rm -rf "$LIBHEIF_BUILD_DIR" "$LIBVIPS_BUILD_DIR"
+}
+
+topic "Installing libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION"
+
+# Try pre-built binary first, fall back to source compilation
+if [[ "$COMPILE_FROM_SOURCE" != "true" ]] && ! cached; then
+	if ! download_prebuilt; then
+		compile_from_source
+	fi
+elif [[ "$COMPILE_FROM_SOURCE" == "true" ]]; then
+	message "Source compilation requested via COMPILE_FROM_SOURCE=true"
+	compile_from_source
+fi
+
+# Use cached/downloaded version
+if ! cached; then
+	message "ERROR: No usable libvips installation found"
 	exit 1
 fi
 
-echo "       System dependencies found" | indent
-echo "       CMake version: $(cmake --version | head -n1)" | indent
+mkdir -p $vendor
+cp -r $bundle/* $vendor/
 
-# Build libheif
-echo "-----> Building libheif $LIBHEIF_VERSION"
-LIBHEIF_CACHE_FILE="$CACHE_DIR/libheif-$LIBHEIF_VERSION.tar.gz"
+topic "Building runtime environment"
+mkdir -p $BUILD_DIR/.profile.d
 
-if [ ! -f "$LIBHEIF_CACHE_FILE" ]; then
-	curl -L -o "$LIBHEIF_CACHE_FILE" \
-		"https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz" | indent
-fi
-
-tar -xzf "$LIBHEIF_CACHE_FILE" | indent
-cd "libheif-${LIBHEIF_VERSION}"
-
-mkdir build
-cd build
-cmake .. \
-	-DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-	-DCMAKE_BUILD_TYPE=Release \
-	-DWITH_DAV1D=ON \
-	-DWITH_AOM_DECODER=ON \
-	-DWITH_AOM_ENCODER=ON \
-	-DCMAKE_INSTALL_RPATH="$INSTALL_DIR/lib;$INSTALL_DIR/lib/$LIB_ARCH" \
-	-DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE \
-	-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-	-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,$INSTALL_DIR/lib -Wl,-rpath,$INSTALL_DIR/lib/$LIB_ARCH" \
-	-DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath,$INSTALL_DIR/lib -Wl,-rpath,$INSTALL_DIR/lib/$LIB_ARCH" | indent
-
-make -j$(nproc) | indent
-make install | indent
-
-# Patch rpath for libheif binaries and libraries
-echo "-----> Setting rpath for libheif binaries and libraries"
-if [ -d "$INSTALL_DIR/bin" ]; then
-	for binary in "$INSTALL_DIR/bin"/*; do
-		if [ -f "$binary" ] && [ -x "$binary" ]; then
-			echo "       Patching $(basename $binary)..." | indent
-			patchelf --set-rpath "$INSTALL_DIR/lib:$INSTALL_DIR/lib/$LIB_ARCH" "$binary" || echo "       Failed to patch $(basename $binary)" | indent
-		fi
-	done
-fi
-
-if [ -d "$INSTALL_DIR/lib" ]; then
-	for lib in "$INSTALL_DIR/lib"/*.so* "$INSTALL_DIR/lib/$LIB_ARCH"/*.so*; do
-		if [ -f "$lib" ] && [ ! -L "$lib" ]; then
-			echo "       Patching $(basename $lib)..." | indent
-			patchelf --set-rpath "$INSTALL_DIR/lib:$INSTALL_DIR/lib/$LIB_ARCH" "$lib" || echo "       Failed to patch $(basename $lib)" | indent
-		fi
-	done
-fi
-
-cd ../..
-rm -rf "libheif-${LIBHEIF_VERSION}"
-
-# Build libvips
-echo "-----> Building libvips $LIBVIPS_VERSION"
-LIBVIPS_CACHE_FILE="$CACHE_DIR/vips-$LIBVIPS_VERSION.tar.xz"
-
-if [ ! -f "$LIBVIPS_CACHE_FILE" ]; then
-	curl -L -o "$LIBVIPS_CACHE_FILE" \
-		"https://github.com/libvips/libvips/releases/download/v${LIBVIPS_VERSION}/vips-${LIBVIPS_VERSION}.tar.xz" | indent
-fi
-
-tar -xf "$LIBVIPS_CACHE_FILE" | indent
-cd "vips-${LIBVIPS_VERSION}"
-
-# Set additional rpath flags for meson
-export LDFLAGS="$LDFLAGS -Wl,-rpath,\$ORIGIN/../lib -Wl,-rpath,\$ORIGIN/../lib/$LIB_ARCH"
-
-meson setup build \
-	--prefix="$INSTALL_DIR" \
-	--buildtype=release \
-	-Dheif=enabled \
-	-Dheif-module=disabled \
-	-Dc_link_args="-Wl,-rpath,$INSTALL_DIR/lib -Wl,-rpath,$INSTALL_DIR/lib/$LIB_ARCH -Wl,-rpath,\$ORIGIN/../lib -Wl,-rpath,\$ORIGIN/../lib/$LIB_ARCH" \
-	-Dcpp_link_args="-Wl,-rpath,$INSTALL_DIR/lib -Wl,-rpath,$INSTALL_DIR/lib/$LIB_ARCH -Wl,-rpath,\$ORIGIN/../lib -Wl,-rpath,\$ORIGIN/../lib/$LIB_ARCH" | indent
-
-cd build
-meson compile | indent
-meson install | indent
-
-# Patch rpath for libvips binaries and libraries
-echo "-----> Setting rpath for libvips binaries and libraries"
-if [ -d "$INSTALL_DIR/bin" ]; then
-	for binary in "$INSTALL_DIR/bin"/*; do
-		if [ -f "$binary" ] && [ -x "$binary" ]; then
-			echo "       Patching $(basename $binary)..." | indent
-			patchelf --set-rpath "$INSTALL_DIR/lib:$INSTALL_DIR/lib/$LIB_ARCH" "$binary" || echo "       Failed to patch $(basename $binary)" | indent
-			# Verify immediately
-			readelf -d "$binary" | grep -E "(RPATH|RUNPATH)" | sed 's/^/         /' || echo "         No rpath set for $(basename $binary)" | indent
-		fi
-	done
-fi
-
-if [ -d "$INSTALL_DIR/lib" ]; then
-	for lib in "$INSTALL_DIR/lib"/*.so* "$INSTALL_DIR/lib/$LIB_ARCH"/*.so*; do
-		if [ -f "$lib" ] && [ ! -L "$lib" ]; then
-			echo "       Patching $(basename $lib)..." | indent
-			patchelf --set-rpath "$INSTALL_DIR/lib:$INSTALL_DIR/lib/$LIB_ARCH" "$lib" || echo "       Failed to patch $(basename $lib)" | indent
-		fi
-	done
-fi
-
-cd ../..
-rm -rf "vips-${LIBVIPS_VERSION}"
-
-# Create .profile.d script
-echo "-----> Creating runtime configuration"
-mkdir -p "$BUILD_DIR/.profile.d"
-
-cat >"$BUILD_DIR/.profile.d/libvips.sh" <<EOF
-export PATH="\$HOME/vendor/libvips/bin:\$PATH"
-export LD_LIBRARY_PATH="\$HOME/vendor/libvips/lib:\$HOME/vendor/libvips/lib/$LIB_ARCH:\$LD_LIBRARY_PATH"
-export PKG_CONFIG_PATH="\$HOME/vendor/libvips/lib/pkgconfig:\$HOME/vendor/libvips/lib/$LIB_ARCH/pkgconfig:\$PKG_CONFIG_PATH"
-export VIPS_WARNING=0
+cat <<EOF >$BUILD_DIR/.profile.d/libvips.sh
+export PATH="\$PATH:\$HOME/vendor/libvips/bin"
+export LD_LIBRARY_PATH="\$LD_LIBRARY_PATH:\$HOME/vendor/libvips/lib:\$HOME/vendor/libvips/lib/$LIB_ARCH_DIR"
+export LIBRARY_PATH="\$LIBRARY_PATH:\$HOME/vendor/libvips/lib:\$HOME/vendor/libvips/lib/$LIB_ARCH_DIR"
+export INCLUDE_PATH="\$INCLUDE_PATH:\$HOME/vendor/libvips/include"
+export CPATH="\$CPATH:\$HOME/vendor/libvips/include"
+export CPPPATH="\$CPPPATH:\$HOME/vendor/libvips/include"
+export PKG_CONFIG_PATH="\$PKG_CONFIG_PATH:\$HOME/vendor/libvips/lib/pkgconfig:\$HOME/vendor/libvips/lib/$LIB_ARCH_DIR/pkgconfig"
 EOF
 
-# Also, when testing in the compile script, use the correct library path:
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$INSTALL_DIR/lib/$LIB_ARCH:$LD_LIBRARY_PATH"
+# Set environment for build
+export PATH="$PATH:$vendor/bin"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$vendor/lib:$vendor/lib/$LIB_ARCH_DIR"
+export LIBRARY_PATH="$LIBRARY_PATH:$vendor/lib:$vendor/lib/$LIB_ARCH_DIR"
+export INCLUDE_PATH="$INCLUDE_PATH:$vendor/include"
+export CPATH="$CPATH:$vendor/include"
+export CPPPATH="$CPPPATH:$vendor/include"
+export PKG_CONFIG_PATH="$PKG_CONFIG_PATH:$vendor/lib/pkgconfig:$vendor/lib/$LIB_ARCH_DIR/pkgconfig"
 
-# Clean up
-echo "-----> Cleaning up"
-apt-get clean | indent
-rm -rf /var/lib/apt/lists/* | indent
+# Give environment to later buildpacks
+export | grep -E -e ' (PATH|LD_LIBRARY_PATH|LIBRARY_PATH|INCLUDE_PATH|CPATH|CPPPATH|PKG_CONFIG_PATH)=' >"$LP_DIR/export"
 
-echo "-----> libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION installation complete"
-
-# Test installation
-if [ -f "$INSTALL_DIR/bin/vips" ]; then
-	echo "-----> Testing vips installation:"
-	"$INSTALL_DIR/bin/vips" --version | indent
-	echo "-----> Supported formats:"
-	"$INSTALL_DIR/bin/vips" list classes | grep -i heif | indent || echo "       HEIF support status unclear" | indent
-
-	# Verify rpath is set correctly
-	echo "-----> Verifying rpath configuration:"
-	if command -v readelf >/dev/null 2>&1; then
-		echo "       Checking vips binary:" | indent
-		readelf -d "$INSTALL_DIR/bin/vips" | grep -E "(RPATH|RUNPATH)" | indent || echo "       No rpath found in vips binary" | indent
-
-		echo "       Checking libvips.so:" | indent
-		if [ -f "$INSTALL_DIR/lib/$LIB_ARCH/libvips.so" ]; then
-			readelf -d "$INSTALL_DIR/lib/$LIB_ARCH/libvips.so" | grep -E "(RPATH|RUNPATH)" | indent || echo "       No rpath found in libvips.so" | indent
-		elif [ -f "$INSTALL_DIR/lib/libvips.so" ]; then
-			readelf -d "$INSTALL_DIR/lib/libvips.so" | grep -E "(RPATH|RUNPATH)" | indent || echo "       No rpath found in libvips.so" | indent
-		else
-			echo "       libvips.so not found" | indent
-		fi
-
-		echo "       Checking library dependencies:" | indent
-		ldd "$INSTALL_DIR/bin/vips" | grep -E "(libvips|libheif)" | indent || echo "       No libvips/libheif dependencies found" | indent
+# Verify installation
+if [ -f "$vendor/bin/vips" ]; then
+	message "Installation successful!"
+	if [ -f "$vendor/VERSION" ]; then
+		cat "$vendor/VERSION" | while read line; do
+			message "$line"
+		done
 	fi
+
+	# Test HEIF support
+	if "$vendor/bin/vips" list | grep -q "heif"; then
+		message "✓ HEIF support confirmed"
+	else
+		message "⚠ HEIF support not detected"
+	fi
+else
+	message "ERROR: libvips installation failed"
+	exit 1
 fi

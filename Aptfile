@@ -1,0 +1,41 @@
+# Build essentials
+build-essential
+pkg-config
+cmake
+meson
+ninja-build
+patchelf
+
+# Core development libraries
+glib-2.0-dev
+libexpat1-dev
+libxml2-dev
+libfftw3-dev
+
+# Image format libraries
+libjpeg-turbo8-dev
+libpng-dev
+libtiff6-dev
+libwebp-dev
+libgif-dev
+libexif-dev
+liblcms2-dev
+libopenjp2-7-dev
+libopenexr-3-0-dev
+
+# Text and vector graphics
+libpango1.0-dev
+librsvg2-dev
+libgsf-1-dev
+
+# HEIF/AVIF codec dependencies
+libde265-dev
+libx265-dev
+libaom-dev
+libdav1d-dev
+
+# Additional image processing (Heroku-24 specific)
+libspng-dev
+libcgif-dev
+libimagequant-dev
+liborc-0.4-dev

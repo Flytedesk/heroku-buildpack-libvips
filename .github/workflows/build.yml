@@ -1,0 +1,311 @@
+name: Build libvips Buildpack
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Build weekly to catch new libvips releases
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      libvips_version:
+        description: "libvips version to build"
+        required: false
+        default: "8.17.0"
+      libheif_version:
+        description: "libheif version to build"
+        required: false
+        default: "1.19.8"
+      stacks:
+        description: "Heroku stacks to build (comma-separated: 18,20,22,24)"
+        required: false
+        default: "24"
+      architectures:
+        description: "Architectures to build (comma-separated: amd64,arm64)"
+        required: false
+        default: "amd64,arm64"
+
+env:
+  LIBVIPS_VERSION: ${{ github.event.inputs.libvips_version || '8.17.0' }}
+  LIBHEIF_VERSION: ${{ github.event.inputs.libheif_version || '1.19.8' }}
+
+jobs:
+  # Detect what needs to be built
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      stacks: ${{ steps.matrix.outputs.stacks }}
+      architectures: ${{ steps.matrix.outputs.architectures }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup build matrix
+        id: matrix
+        run: |
+          # Parse input parameters or use defaults
+          if [ -n "${{ github.event.inputs.stacks }}" ]; then
+            STACKS="${{ github.event.inputs.stacks }}"
+          else
+            STACKS="24"
+          fi
+
+          if [ -n "${{ github.event.inputs.architectures }}" ]; then
+            ARCHS="${{ github.event.inputs.architectures }}"
+          else
+            ARCHS="amd64,arm64"
+          fi
+
+          # Convert to JSON arrays
+          STACKS_JSON=$(echo "$STACKS" | jq -R 'split(",") | map(tonumber)')
+          ARCHS_JSON=$(echo "$ARCHS" | jq -R 'split(",")')
+
+          echo "stacks=$STACKS_JSON" >> $GITHUB_OUTPUT
+          echo "architectures=$ARCHS_JSON" >> $GITHUB_OUTPUT
+
+          echo "Building for stacks: $STACKS_JSON"
+          echo "Building for architectures: $ARCHS_JSON"
+
+      - name: Check if should release
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Build matrix job for each stack/architecture combination
+  build:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJson(needs.setup.outputs.stacks) }}
+        arch: ${{ fromJson(needs.setup.outputs.architectures) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-
+            ${{ runner.os }}-buildx-${{ matrix.stack }}-
+            ${{ runner.os }}-buildx-
+
+      - name: Build for heroku-${{ matrix.stack }} (${{ matrix.arch }})
+        run: |
+          export LIBVIPS_VERSION="${{ env.LIBVIPS_VERSION }}"
+          export LIBHEIF_VERSION="${{ env.LIBHEIF_VERSION }}"
+
+          chmod +x build.sh
+          ./build.sh --stack ${{ matrix.stack }} --arch ${{ matrix.arch }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: heroku-${{ matrix.stack }}-${{ matrix.arch }}
+          path: |
+            build/heroku-${{ matrix.stack }}-${{ matrix.arch }}.tar.gz
+            build/heroku-${{ matrix.stack }}-${{ matrix.arch }}.config.log
+          retention-days: 30
+
+      - name: Test installation
+        run: |
+          # Test that the tarball is valid and libvips works
+          cd build
+          if [ -f "heroku-${{ matrix.stack }}-${{ matrix.arch }}.tar.gz" ]; then
+            echo "Testing tarball contents..."
+            tar -tzf "heroku-${{ matrix.stack }}-${{ matrix.arch }}.tar.gz" | head -20
+            
+            # Extract and verify key files exist
+            mkdir -p test_extract
+            tar -xzf "heroku-${{ matrix.stack }}-${{ matrix.arch }}.tar.gz" -C test_extract
+            
+            if [ -f "test_extract/bin/vips" ] && [ -f "test_extract/lib/*/libvips.so*" ]; then
+              echo "✓ Required files found in tarball"
+            else
+              echo "✗ Missing required files in tarball"
+              find test_extract -type f | head -20
+              exit 1
+            fi
+          else
+            echo "✗ Tarball not found"
+            exit 1
+          fi
+
+      - name: Test HEIF functionality
+        run: |
+          # Use our success test script
+          chmod +x test.sh
+          ./test.sh ${{ matrix.arch }}
+
+  # Integration test with a real Heroku app
+  integration-test:
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: heroku-*
+          path: test_artifacts
+          merge-multiple: true
+
+      - name: Create test app
+        run: |
+          mkdir -p test_app
+          cd test_app
+
+          # Create a simple Ruby app that uses ruby-vips
+          cat > Gemfile << 'EOF'
+          source 'https://rubygems.org'
+          gem 'ruby-vips'
+          gem 'rackup'
+          EOF
+
+          cat > config.ru << 'EOF'
+          require 'vips'
+
+          app = proc do |env|
+            case env['PATH_INFO']
+            when '/health'
+              [200, {'Content-Type' => 'text/plain'}, ["OK"]]
+            when '/vips-info'
+              info = {
+                'ruby-vips' => Vips::VERSION,
+                'libvips' => Vips::LIBRARY_VERSION,
+                'formats' => Vips.get_suffixes
+              }
+              [200, {'Content-Type' => 'application/json'}, [info.to_json]]
+            else
+              [404, {'Content-Type' => 'text/plain'}, ["Not Found"]]
+            end
+          end
+
+          run app
+          EOF
+
+          echo "ruby '3.2.0'" >> Gemfile
+
+      - name: Test with Docker (simulating Heroku)
+        run: |
+          # Create a simple Dockerfile that simulates Heroku deployment
+          cd test_app
+
+          cat > Dockerfile << 'EOF'
+          FROM heroku/heroku:24
+
+          # Install Ruby
+          RUN apt-get update && apt-get install -y ruby ruby-dev bundler
+
+          # Copy our test artifacts
+          COPY ../test_artifacts/heroku-24-amd64.tar.gz /tmp/
+
+          # Extract libvips
+          RUN mkdir -p /app/vendor/libvips && \
+              cd /app/vendor/libvips && \
+              tar xzf /tmp/heroku-24-amd64.tar.gz
+
+          # Set environment
+          ENV PATH="/app/vendor/libvips/bin:$PATH"
+          ENV LD_LIBRARY_PATH="/app/vendor/libvips/lib:/app/vendor/libvips/lib/x86_64-linux-gnu"
+          ENV PKG_CONFIG_PATH="/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/x86_64-linux-gnu/pkgconfig"
+
+          WORKDIR /app
+          COPY . .
+
+          RUN bundle install
+
+          CMD ["ruby", "-e", "require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')"]
+          EOF
+
+          if docker build -t test-app .; then
+            echo "✓ Docker build successful"
+            if docker run --rm test-app; then
+              echo "✓ Integration test passed"
+            else
+              echo "✗ Integration test failed"
+              exit 1
+            fi
+          else
+            echo "✗ Docker build failed"
+            exit 1
+          fi
+
+  # Create release if this is a tag push
+  release:
+    needs: [setup, build, integration-test]
+    runs-on: ubuntu-latest
+    if: needs.setup.outputs.should_release == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: heroku-*
+          path: release_artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release_artifacts/*.tar.gz
+            release_artifacts/*.config.log
+          body: |
+            ## libvips Buildpack Release
+
+            - **libvips version:** ${{ env.LIBVIPS_VERSION }}
+            - **libheif version:** ${{ env.LIBHEIF_VERSION }}
+            - **Build date:** ${{ github.run_id }}
+
+            ### Supported Stacks and Architectures
+
+            This release includes pre-compiled binaries for:
+
+            ${{ fromJson(needs.setup.outputs.stacks) }} (stacks)
+            × ${{ fromJson(needs.setup.outputs.architectures) }} (architectures)
+
+            ### Usage
+
+            Add this buildpack to your Heroku app:
+
+            ```bash
+            heroku buildpacks:add --index 1 https://github.com/YOUR_USERNAME/heroku-buildpack-libvips
+            ```
+
+            ### Features
+
+            - ✅ HEIF/HEIC support via libheif ${{ env.LIBHEIF_VERSION }}
+            - ✅ AVIF support with AOM and DAV1D codecs
+            - ✅ All standard image formats (JPEG, PNG, TIFF, WebP, etc.)
+            - ✅ Multi-architecture support (x86_64 and ARM64)
+            - ✅ Compatible with ruby-vips, pyvips, and sharp
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
