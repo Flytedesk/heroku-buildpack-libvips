@@ -302,6 +302,12 @@ jobs:
               esac && \
               echo "LIB_ARCH_DIR=$LIB_ARCH_DIR" >> /etc/environment
 
+          # Set final environment while still root
+          RUN . /etc/environment && \
+              echo "PATH=/app/vendor/libvips/bin:/app/vendor/bundle/bin:$PATH" >> /etc/environment && \
+              echo "LD_LIBRARY_PATH=/app/vendor/libvips/lib:/app/vendor/libvips/lib/$LIB_ARCH_DIR" >> /etc/environment && \
+              echo "PKG_CONFIG_PATH=/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/$LIB_ARCH_DIR/pkgconfig" >> /etc/environment
+
           # Create non-root user for bundle install
           RUN useradd -m -s /bin/bash testuser
           RUN mkdir -p /app && chown -R testuser:testuser /app
@@ -332,12 +338,6 @@ jobs:
               bundle config set --local path 'vendor/bundle' && \
               bundle config set --local bin 'vendor/bundle/bin' && \
               bundle install
-
-          # Set final environment
-          RUN . /etc/environment && \
-              echo "PATH=/app/vendor/libvips/bin:/app/vendor/bundle/bin:\$PATH" >> /etc/environment && \
-              echo "LD_LIBRARY_PATH=/app/vendor/libvips/lib:/app/vendor/libvips/lib/\$LIB_ARCH_DIR" >> /etc/environment && \
-              echo "PKG_CONFIG_PATH=/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/\$LIB_ARCH_DIR/pkgconfig" >> /etc/environment
 
           CMD ["/bin/bash", "-c", ". /etc/environment && ruby -e \"require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')\""]
           EOF
