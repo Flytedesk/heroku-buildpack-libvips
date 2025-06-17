@@ -22,7 +22,7 @@ on:
       stacks:
         description: "Heroku stacks to build (comma-separated: 18,20,22,24)"
         required: false
-        default: "24"
+        default: "22,24"
       architectures:
         description: "Architectures to build (comma-separated: amd64,arm64)"
         required: false
