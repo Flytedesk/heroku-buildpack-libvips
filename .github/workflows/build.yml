@@ -98,12 +98,20 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}
+          key: ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}-${{ hashFiles('container/Dockerfile') }}
           restore-keys: |
+            ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}-
             ${{ runner.os }}-buildx-${{ matrix.stack }}-${{ matrix.arch }}-
             ${{ runner.os }}-buildx-${{ matrix.stack }}-
             ${{ runner.os }}-buildx-
@@ -113,8 +121,35 @@ jobs:
           export LIBVIPS_VERSION="${{ env.LIBVIPS_VERSION }}"
           export LIBHEIF_VERSION="${{ env.LIBHEIF_VERSION }}"
 
-          chmod +x build.sh
-          ./build.sh --stack ${{ matrix.stack }} --arch ${{ matrix.arch }}
+          # Set platform for multi-arch builds
+          ARCH="${{ matrix.arch }}"
+          case "$ARCH" in
+            amd64) PLATFORM="linux/amd64" ;;
+            arm64) PLATFORM="linux/arm64" ;;
+            *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+          esac
+
+          # Build with cache
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --file container/Dockerfile \
+            --build-arg LIBVIPS_VERSION="$LIBVIPS_VERSION" \
+            --build-arg LIBHEIF_VERSION="$LIBHEIF_VERSION" \
+            --tag "ghcr.io/${{ github.repository_owner }}/libvips-builder:heroku-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}" \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --load \
+            .
+
+          # Move cache to avoid ever-growing cache
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+          # Extract artifacts
+          container_id=$(docker create "ghcr.io/${{ github.repository_owner }}/libvips-builder:heroku-${{ matrix.stack }}-${{ matrix.arch }}-${{ env.LIBVIPS_VERSION }}")
+          mkdir -p build
+          docker cp "$container_id:/dist/." build/
+          docker rm "$container_id"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -263,9 +298,18 @@ jobs:
           ENV LD_LIBRARY_PATH="/app/vendor/libvips/lib:/app/vendor/libvips/lib/x86_64-linux-gnu"
           ENV PKG_CONFIG_PATH="/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/x86_64-linux-gnu/pkgconfig"
 
-          WORKDIR /app
-          COPY . .
+          # Create non-root user for bundle install
+          RUN useradd -m -s /bin/bash testuser
+          RUN mkdir -p /app && chown -R testuser:testuser /app
 
+          WORKDIR /app
+          USER testuser
+          COPY --chown=testuser:testuser . .
+
+          # Use the system Ruby version instead of requiring specific version
+          RUN sed -i '/^ruby /d' Gemfile
+
+          # Install gems
           RUN bundle install
 
           CMD ["ruby", "-e", "require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')"]
