@@ -4,7 +4,7 @@
 cat <<EOF
 ---
 config_vars:
-  PATH: /app/vendor/libvips/bin:\$PATH
-  LD_LIBRARY_PATH: /app/vendor/libvips/lib:\$LD_LIBRARY_PATH
-  PKG_CONFIG_PATH: /app/vendor/libvips/lib/pkgconfig:\$PKG_CONFIG_PATH
+  VIPS_BLOCK_UNTRUSTED: false
+addons: []
+default_process_types: {}
 EOF
