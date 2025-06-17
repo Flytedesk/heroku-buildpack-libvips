@@ -283,7 +283,7 @@ jobs:
               chmod -R 755 /var/lib/apt && \
               apt-get clean && \
               apt-get update && \
-              apt-get install -y ruby ruby-dev bundler
+              apt-get install -y ruby ruby-dev bundler build-essential pkg-config libffi-dev
 
           # Copy our test artifacts
           COPY heroku-24-amd64.tar.gz /tmp/
@@ -293,10 +293,14 @@ jobs:
               cd /app/vendor/libvips && \
               tar xzf /tmp/heroku-24-amd64.tar.gz
 
-          # Set environment
-          ENV PATH="/app/vendor/libvips/bin:$PATH"
-          ENV LD_LIBRARY_PATH="/app/vendor/libvips/lib:/app/vendor/libvips/lib/x86_64-linux-gnu"
-          ENV PKG_CONFIG_PATH="/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/x86_64-linux-gnu/pkgconfig"
+          # Detect architecture for library paths
+          RUN ARCH=$(dpkg --print-architecture) && \
+              case "$ARCH" in \
+                amd64) LIB_ARCH_DIR="x86_64-linux-gnu" ;; \
+                arm64) LIB_ARCH_DIR="aarch64-linux-gnu" ;; \
+                *) LIB_ARCH_DIR="x86_64-linux-gnu" ;; \
+              esac && \
+              echo "LIB_ARCH_DIR=$LIB_ARCH_DIR" >> /etc/environment
 
           # Create non-root user for bundle install
           RUN useradd -m -s /bin/bash testuser
@@ -309,10 +313,33 @@ jobs:
           # Use the system Ruby version instead of requiring specific version
           RUN sed -i '/^ruby /d' Gemfile
 
-          # Install gems
-          RUN bundle install
+          # Configure bundle to install gems locally
+          ENV BUNDLE_PATH="/app/vendor/bundle"
+          ENV BUNDLE_BIN="/app/vendor/bundle/bin"
+          ENV GEM_HOME="/app/vendor/bundle"
 
-          CMD ["ruby", "-e", "require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')"]
+          # Set up environment with proper architecture paths
+          RUN . /etc/environment && \
+              echo "export PATH=\"/app/vendor/libvips/bin:/app/vendor/bundle/bin:\$PATH\"" >> ~/.bashrc && \
+              echo "export LD_LIBRARY_PATH=\"/app/vendor/libvips/lib:/app/vendor/libvips/lib/\$LIB_ARCH_DIR\"" >> ~/.bashrc && \
+              echo "export PKG_CONFIG_PATH=\"/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/\$LIB_ARCH_DIR/pkgconfig\"" >> ~/.bashrc
+
+          # Install gems locally
+          RUN . /etc/environment && \
+              export PATH="/app/vendor/libvips/bin:/app/vendor/bundle/bin:$PATH" && \
+              export LD_LIBRARY_PATH="/app/vendor/libvips/lib:/app/vendor/libvips/lib/$LIB_ARCH_DIR" && \
+              export PKG_CONFIG_PATH="/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/$LIB_ARCH_DIR/pkgconfig" && \
+              bundle config set --local path 'vendor/bundle' && \
+              bundle config set --local bin 'vendor/bundle/bin' && \
+              bundle install
+
+          # Set final environment
+          RUN . /etc/environment && \
+              echo "PATH=/app/vendor/libvips/bin:/app/vendor/bundle/bin:\$PATH" >> /etc/environment && \
+              echo "LD_LIBRARY_PATH=/app/vendor/libvips/lib:/app/vendor/libvips/lib/\$LIB_ARCH_DIR" >> /etc/environment && \
+              echo "PKG_CONFIG_PATH=/app/vendor/libvips/lib/pkgconfig:/app/vendor/libvips/lib/\$LIB_ARCH_DIR/pkgconfig" >> /etc/environment
+
+          CMD ["/bin/bash", "-c", ". /etc/environment && ruby -e \"require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')\""]
           EOF
 
           if docker build -t test-app .; then
