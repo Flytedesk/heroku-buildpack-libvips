@@ -397,7 +397,7 @@ jobs:
             Add this buildpack to your Heroku app:
 
             ```bash
-            heroku buildpacks:add --index 1 https://github.com/YOUR_USERNAME/heroku-buildpack-libvips
+            heroku buildpacks:add --index 1 https://github.com/mariochavez/heroku-buildpack-libvips
             ```
 
             ### Features
@@ -410,4 +410,4 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
