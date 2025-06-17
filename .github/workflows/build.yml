@@ -339,7 +339,7 @@ jobs:
               bundle config set --local bin 'vendor/bundle/bin' && \
               bundle install
 
-          CMD ["/bin/bash", "-c", ". /etc/environment && ruby -e \"require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')\""]
+          CMD ["/bin/bash", "-c", ". /etc/environment && cd /app && bundle exec ruby -e \"require 'vips'; puts 'libvips version: ' + Vips::LIBRARY_VERSION; puts 'HEIF support: ' + (Vips.get_suffixes.any? { |s| s.include?('heif') || s.include?('heic') } ? 'YES' : 'NO')\""]
           EOF
 
           if docker build -t test-app .; then
