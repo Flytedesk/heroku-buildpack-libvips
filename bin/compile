@@ -53,8 +53,37 @@ indent() {
 
 echo "-----> Installing libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION"
 
-# Check for required dependencies (assume apt buildpack has installed them)
-echo "-----> Checking system dependencies"
+# Check for required dependencies and set up environment
+echo "-----> Checking system dependencies and setting up environment"
+
+# If APT buildpack was used, set up paths
+if [ -d "/app/.apt" ]; then
+	export PATH="/app/.apt/usr/bin:$PATH"
+	export LD_LIBRARY_PATH="/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/aarch64-linux-gnu:/app/.apt/usr/lib:$LD_LIBRARY_PATH"
+	export LIBRARY_PATH="/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/aarch64-linux-gnu:/app/.apt/usr/lib:$LIBRARY_PATH"
+	export INCLUDE_PATH="/app/.apt/usr/include:$INCLUDE_PATH"
+	export CPATH="/app/.apt/usr/include:$CPATH"
+	export CPPFLAGS="-I/app/.apt/usr/include $CPPFLAGS"
+	export LDFLAGS="-L/app/.apt/usr/lib/x86_64-linux-gnu -L/app/.apt/usr/lib/aarch64-linux-gnu -L/app/.apt/usr/lib $LDFLAGS"
+	export CMAKE_PREFIX_PATH="/app/.apt/usr"
+	export CMAKE_MODULE_PATH="/app/.apt/usr/share/cmake-3.28/Modules"
+	export PKG_CONFIG_PATH="/app/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:/app/.apt/usr/lib/aarch64-linux-gnu/pkgconfig:/app/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
+fi
+
+# Similar check for build environment
+if [ -d "$BUILD_DIR/.apt" ]; then
+	export PATH="$BUILD_DIR/.apt/usr/bin:$PATH"
+	export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu:$BUILD_DIR/.apt/usr/lib:$LD_LIBRARY_PATH"
+	export LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu:$BUILD_DIR/.apt/usr/lib:$LIBRARY_PATH"
+	export INCLUDE_PATH="$BUILD_DIR/.apt/usr/include:$INCLUDE_PATH"
+	export CPATH="$BUILD_DIR/.apt/usr/include:$CPATH"
+	export CPPFLAGS="-I$BUILD_DIR/.apt/usr/include $CPPFLAGS"
+	export LDFLAGS="-L$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu -L$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu -L$BUILD_DIR/.apt/usr/lib $LDFLAGS"
+	export CMAKE_PREFIX_PATH="$BUILD_DIR/.apt/usr"
+	export CMAKE_MODULE_PATH="$BUILD_DIR/.apt/usr/share/cmake-3.28/Modules"
+	export PKG_CONFIG_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/aarch64-linux-gnu/pkgconfig:$BUILD_DIR/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
+fi
+
 missing_deps=()
 
 for dep in cmake meson ninja patchelf pkg-config gcc; do
@@ -72,6 +101,7 @@ if [ ${#missing_deps[@]} -ne 0 ]; then
 fi
 
 echo "       System dependencies found" | indent
+echo "       CMake version: $(cmake --version | head -n1)" | indent
 
 # Build libheif
 echo "-----> Building libheif $LIBHEIF_VERSION"
