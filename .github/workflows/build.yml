@@ -149,7 +149,7 @@ jobs:
             echo "Expected binary: test_extract/bin/vips"
             echo "Expected library: test_extract/lib/$LIB_ARCH/libvips.so*"
             
-            if [ -f "test_extract/bin/vips" ] && [ -f "test_extract/lib/$LIB_ARCH"/libvips.so* ]; then
+            if [ -f "test_extract/bin/vips" ] && ls "test_extract/lib/$LIB_ARCH"/libvips.so* >/dev/null 2>&1; then
               echo "✓ Required files found in tarball"
               
               # Test that vips binary can at least show help
