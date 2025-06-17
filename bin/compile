@@ -53,38 +53,25 @@ indent() {
 
 echo "-----> Installing libvips $LIBVIPS_VERSION with libheif $LIBHEIF_VERSION"
 
-# Install build dependencies
-echo "-----> Installing system dependencies"
-apt-get update -qq | indent
-apt-get install -y -qq \
-	build-essential \
-	pkg-config \
-	glib2.0-dev \
-	libexpat1-dev \
-	librsvg2-dev \
-	libpng-dev \
-	libjpeg-turbo8-dev \
-	libwebp-dev \
-	libexif-dev \
-	liblcms2-dev \
-	libgsf-1-dev \
-	libfftw3-dev \
-	liborc-0.4-dev \
-	libpango1.0-dev \
-	libmagickwand-dev \
-	libcfitsio-dev \
-	libgif-dev \
-	libpoppler-glib-dev \
-	libopenexr-dev \
-	libmatio-dev \
-	libde265-dev \
-	libx265-dev \
-	libaom-dev \
-	libdav1d-dev \
-	cmake \
-	meson \
-	ninja-build \
-	patchelf | indent
+# Check for required dependencies (assume apt buildpack has installed them)
+echo "-----> Checking system dependencies"
+missing_deps=()
+
+for dep in cmake meson ninja patchelf pkg-config gcc; do
+	if ! command -v "$dep" >/dev/null 2>&1; then
+		missing_deps+=("$dep")
+	fi
+done
+
+if [ ${#missing_deps[@]} -ne 0 ]; then
+	echo "       ERROR: Missing required dependencies: ${missing_deps[*]}" | indent
+	echo "       Please add heroku-community/apt buildpack with an Aptfile containing:" | indent
+	echo "       build-essential, pkg-config, cmake, meson, ninja-build, patchelf" | indent
+	echo "       and other required development libraries." | indent
+	exit 1
+fi
+
+echo "       System dependencies found" | indent
 
 # Build libheif
 echo "-----> Building libheif $LIBHEIF_VERSION"
