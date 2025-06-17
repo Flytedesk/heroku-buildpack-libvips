@@ -96,7 +96,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
 
       - name: Cache Docker layers
         uses: actions/cache@v4
@@ -241,8 +241,14 @@ jobs:
           cat > Dockerfile << 'EOF'
           FROM heroku/heroku:24
 
-          # Install Ruby
-          RUN apt-get update && apt-get install -y ruby ruby-dev bundler
+          # Fix apt permissions for heroku-24
+          USER root
+          RUN rm -rf /var/lib/apt/lists/* && \
+              mkdir -p /var/lib/apt/lists/partial && \
+              chmod -R 755 /var/lib/apt && \
+              apt-get clean && \
+              apt-get update && \
+              apt-get install -y ruby ruby-dev bundler
 
           # Copy our test artifacts
           COPY heroku-24-amd64.tar.gz /tmp/
