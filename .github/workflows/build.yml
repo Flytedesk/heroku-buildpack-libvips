@@ -137,11 +137,34 @@ jobs:
             mkdir -p test_extract
             tar -xzf "heroku-${{ matrix.stack }}-${{ matrix.arch }}.tar.gz" -C test_extract
             
-            if [ -f "test_extract/bin/vips" ] && [ -f "test_extract/lib/*/libvips.so*" ]; then
+            # Check for required files with proper architecture paths
+            ARCH="${{ matrix.arch }}"
+            if [ "$ARCH" = "amd64" ]; then
+              LIB_ARCH="x86_64-linux-gnu"
+            else
+              LIB_ARCH="aarch64-linux-gnu"
+            fi
+            
+            echo "Looking for files in extracted tarball..."
+            echo "Expected binary: test_extract/bin/vips"
+            echo "Expected library: test_extract/lib/$LIB_ARCH/libvips.so*"
+            
+            if [ -f "test_extract/bin/vips" ] && [ -f "test_extract/lib/$LIB_ARCH"/libvips.so* ]; then
               echo "✓ Required files found in tarball"
+              
+              # Test that vips binary can at least show help
+              echo "✓ Testing vips binary..."
+              cd test_extract
+              export LD_LIBRARY_PATH="lib:lib/$LIB_ARCH"
+              if ./bin/vips --help >/dev/null 2>&1; then
+                echo "✓ vips binary is functional"
+              else
+                echo "⚠ vips binary may have issues, but files are present"
+              fi
             else
               echo "✗ Missing required files in tarball"
-              find test_extract -type f | head -20
+              echo "Contents found:"
+              find test_extract -type f | head -30
               exit 1
             fi
           else

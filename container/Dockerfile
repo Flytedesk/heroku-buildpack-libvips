@@ -112,8 +112,9 @@ RUN . /etc/environment && \
 RUN . /etc/environment && \
   echo "export PKG_CONFIG_PATH=${VIPS_PREFIX}/lib/${LIB_ARCH_DIR}/pkgconfig:${PKG_CONFIG_PATH}" >> /etc/environment
 
-# Build libvips with HEIF support
+# Build libvips with HEIF support - ensure PKG_CONFIG_PATH includes libheif
 RUN . /etc/environment && \
+  export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/${LIB_ARCH_DIR}/pkgconfig:${PKG_CONFIG_PATH}" && \
   wget https://github.com/libvips/libvips/releases/download/v${LIBVIPS_VERSION}/vips-${LIBVIPS_VERSION}.tar.xz && \
   tar xf vips-${LIBVIPS_VERSION}.tar.xz && \
   cd vips-${LIBVIPS_VERSION} && \
@@ -153,8 +154,8 @@ RUN . /etc/environment && \
 
 # Clean up unnecessary files to reduce package size
 RUN cd ${VIPS_PREFIX} && \
-  # Remove development files \
-  rm -rf include/vips/cpp include/vips/*.h share/doc share/man && \
+  # Remove development files but keep essential headers \
+  rm -rf share/doc share/man && \
   # Remove static libraries \
   find lib -name "*.a" -delete && \
   find lib -name "*.la" -delete && \
@@ -171,15 +172,23 @@ RUN cd ${VIPS_PREFIX} && \
   echo "build_method: docker_container" >> VERSION && \
   echo "stack: heroku-24" >> VERSION
 
-# Verify the build
+# Verify the build - use proper environment
 RUN . /etc/environment && \
   cd ${VIPS_PREFIX} && \
+  export LD_LIBRARY_PATH="lib:lib/${LIB_ARCH_DIR}" && \
+  export PKG_CONFIG_PATH="lib/pkgconfig:lib/${LIB_ARCH_DIR}/pkgconfig" && \
   echo "=== Build Verification ===" && \
   echo "libvips version:" && \
-  LD_LIBRARY_PATH=lib:lib/${LIB_ARCH_DIR} ./bin/vips --version && \
+  ./bin/vips --version && \
   echo && \
   echo "HEIF support check:" && \
-  LD_LIBRARY_PATH=lib:lib/${LIB_ARCH_DIR} ./bin/vips list | grep -i heif || echo "HEIF not found in loaders" && \
+  pkg-config --exists libheif && echo "✓ libheif found via pkg-config" || echo "✗ libheif not found via pkg-config" && \
+  echo "Available operations:" && \
+  ./bin/vips list | grep -E "(heif|load|save)" | head -10 && \
+  echo && \
+  echo "Testing HEIF operations directly:" && \
+  (./bin/vips heifload 2>&1 | head -3 || echo "heifload not available") && \
+  (./bin/vips heifsave 2>&1 | head -3 || echo "heifsave not available") && \
   echo && \
   echo "Library dependencies for libvips.so:" && \
   ldd lib/${LIB_ARCH_DIR}/libvips.so.42 | head -10 && \
@@ -198,6 +207,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 RUN ARCH=$(dpkg --print-architecture) && \
   . /etc/environment && \
   cd ${VIPS_PREFIX} && \
+  export LD_LIBRARY_PATH="lib:lib/${LIB_ARCH_DIR}" && \
   { \
   echo "=== libvips Configuration Log ==="; \
   echo "Stack: heroku-24"; \
@@ -205,10 +215,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
   echo "Build date: $(date -u)"; \
   echo ""; \
   echo "$ vips --version"; \
-  LD_LIBRARY_PATH=lib:lib/${LIB_ARCH_DIR} ./bin/vips --version || echo "Version check failed"; \
+  ./bin/vips --version || echo "Version check failed"; \
   echo ""; \
   echo "$ vips list | head -20"; \
-  LD_LIBRARY_PATH=lib:lib/${LIB_ARCH_DIR} ./bin/vips list | head -20 || echo "List command failed"; \
+  ./bin/vips list | head -20 || echo "List command failed"; \
+  echo ""; \
+  echo "$ pkg-config --libs libheif"; \
+  pkg-config --libs libheif || echo "libheif pkg-config failed"; \
   echo ""; \
   echo "=== Library Analysis ==="; \
   echo "Library files:"; \
