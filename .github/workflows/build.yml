@@ -26,7 +26,7 @@ on:
       architectures:
         description: "Architectures to build (comma-separated: amd64,arm64)"
         required: false
-        default: "amd64"
+        default: "amd64,arm64"
 
 env:
   LIBVIPS_VERSION: ${{ github.event.inputs.libvips_version || '8.17.0' }}
@@ -57,7 +57,7 @@ jobs:
           if [ -n "${{ github.event.inputs.architectures }}" ]; then
             ARCHS="${{ github.event.inputs.architectures }}"
           else
-            ARCHS="amd64"
+            ARCHS="amd64,arm64"
           fi
 
           # Convert to compact JSON arrays (single line)
@@ -96,7 +96,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
 
       - name: Cache Docker layers
         uses: actions/cache@v4
@@ -235,6 +235,9 @@ jobs:
           # Create a simple Dockerfile that simulates Heroku deployment
           cd test_app
 
+          # Copy the tarball to the test_app directory first
+          cp ../test_artifacts/heroku-24-amd64.tar.gz .
+
           cat > Dockerfile << 'EOF'
           FROM heroku/heroku:24
 
@@ -242,7 +245,7 @@ jobs:
           RUN apt-get update && apt-get install -y ruby ruby-dev bundler
 
           # Copy our test artifacts
-          COPY ../test_artifacts/heroku-24-amd64.tar.gz /tmp/
+          COPY heroku-24-amd64.tar.gz /tmp/
 
           # Extract libvips
           RUN mkdir -p /app/vendor/libvips && \
