@@ -51,7 +51,7 @@ jobs:
           if [ -n "${{ github.event.inputs.stacks }}" ]; then
             STACKS="${{ github.event.inputs.stacks }}"
           else
-            STACKS="24"
+            STACKS="22,24"
           fi
 
           if [ -n "${{ github.event.inputs.architectures }}" ]; then
