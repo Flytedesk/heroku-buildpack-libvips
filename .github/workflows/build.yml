@@ -20,9 +20,9 @@ on:
         required: false
         default: "1.19.8"
       stacks:
-        description: "Heroku stacks to build (comma-separated: 18,20,22,24)"
+        description: "Heroku stacks to build (comma-separated: 24)"
         required: false
-        default: "22,24"
+        default: "24"
       architectures:
         description: "Architectures to build (comma-separated: amd64,arm64)"
         required: false
@@ -51,7 +51,7 @@ jobs:
           if [ -n "${{ github.event.inputs.stacks }}" ]; then
             STACKS="${{ github.event.inputs.stacks }}"
           else
-            STACKS="22,24"
+            STACKS="24"
           fi
 
           if [ -n "${{ github.event.inputs.architectures }}" ]; then
@@ -60,9 +60,9 @@ jobs:
             ARCHS="amd64,arm64"
           fi
 
-          # Convert to JSON arrays
-          STACKS_JSON=$(echo "$STACKS" | jq -R 'split(",") | map(tonumber)')
-          ARCHS_JSON=$(echo "$ARCHS" | jq -R 'split(",")')
+          # Convert to compact JSON arrays (single line)
+          STACKS_JSON=$(echo "$STACKS" | jq -Rc 'split(",") | map(tonumber)')
+          ARCHS_JSON=$(echo "$ARCHS" | jq -Rc 'split(",")')
 
           echo "stacks=$STACKS_JSON" >> $GITHUB_OUTPUT
           echo "architectures=$ARCHS_JSON" >> $GITHUB_OUTPUT
@@ -180,6 +180,7 @@ jobs:
           # Create a simple Ruby app that uses ruby-vips
           cat > Gemfile << 'EOF'
           source 'https://rubygems.org'
+          ruby '3.4.2'
           gem 'ruby-vips'
           gem 'rackup'
           EOF
@@ -205,8 +206,6 @@ jobs:
 
           run app
           EOF
-
-          echo "ruby '3.2.0'" >> Gemfile
 
       - name: Test with Docker (simulating Heroku)
         run: |
@@ -287,8 +286,8 @@ jobs:
 
             This release includes pre-compiled binaries for:
 
-            ${{ fromJson(needs.setup.outputs.stacks) }} (stacks)
-            × ${{ fromJson(needs.setup.outputs.architectures) }} (architectures)
+            - Stacks: ${{ join(fromJson(needs.setup.outputs.stacks), ', ') }}
+            - Architectures: ${{ join(fromJson(needs.setup.outputs.architectures), ', ') }}
 
             ### Usage
 
