@@ -2,12 +2,12 @@
 
 A modern Heroku buildpack for [libvips](https://github.com/libvips/libvips) with comprehensive HEIF/HEIC and AVIF support.
 
-[![libvips](https://img.shields.io/github/v/tag/mariochavez/heroku-buildpack-libvips?label=libvips&logo=image)](https://github.com/mariochavez/heroku-buildpack-libvips/releases)
+[![libvips](https://img.shields.io/github/v/tag/Flytedesk/heroku-buildpack-libvips?label=libvips&logo=image)](https://github.com/Flytedesk/heroku-buildpack-libvips/releases)
 [![Heroku 20](https://img.shields.io/badge/stack-20-904edf?logo=heroku)](https://devcenter.heroku.com/articles/heroku-20-stack)
 [![Heroku 22](https://img.shields.io/badge/stack-22-904edf?logo=heroku)](https://devcenter.heroku.com/articles/heroku-22-stack)
 [![Heroku 24](https://img.shields.io/badge/stack-24-904edf?logo=heroku)](https://devcenter.heroku.com/articles/heroku-24-stack)
-[![Build](https://github.com/mariochavez/heroku-buildpack-libvips/actions/workflows/build.yml/badge.svg)](https://github.com/mariochavez/heroku-buildpack-libvips/actions/workflows/build.yml)
-[![Multi-arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)](https://github.com/mariochavez/heroku-buildpack-libvips/releases)
+[![Build](https://github.com/Flytedesk/heroku-buildpack-libvips/actions/workflows/build.yml/badge.svg)](https://github.com/Flytedesk/heroku-buildpack-libvips/actions/workflows/build.yml)
+[![Multi-arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)](https://github.com/Flytedesk/heroku-buildpack-libvips/releases)
 
 ## Features
 
@@ -24,7 +24,7 @@ A modern Heroku buildpack for [libvips](https://github.com/libvips/libvips) with
 Add this buildpack to your Heroku app:
 
 ```bash
-heroku buildpacks:add --index 1 https://github.com/mariochavez/heroku-buildpack-libvips
+heroku buildpacks:add --index 1 https://github.com/Flytedesk/heroku-buildpack-libvips
 ```
 
 Deploy your app and verify the installation:
@@ -59,7 +59,7 @@ puts "HEIF support: #{Vips.get_suffixes.include?('.heic')}"
 ```python
 import pyvips
 
-# Process HEIF images  
+# Process HEIF images
 image = pyvips.Image.new_from_file('photo.heic')
 thumbnail = image.thumbnail_image(300)
 thumbnail.write_to_file('thumbnail.jpg')
@@ -127,7 +127,7 @@ For applications requiring system dependencies, use the apt buildpack first:
 heroku buildpacks:add --index 1 heroku-community/apt
 
 # Add libvips buildpack
-heroku buildpacks:add --index 2 https://github.com/mariochavez/heroku-buildpack-libvips
+heroku buildpacks:add --index 2 https://github.com/Flytedesk/heroku-buildpack-libvips
 
 # Add your language buildpack
 heroku buildpacks:add --index 3 heroku/ruby
@@ -150,7 +150,7 @@ For production applications, consider these optimizations:
 # Enable libvips cache
 heroku config:set VIPS_CACHE_MAX=100
 
-# Set operation cache size  
+# Set operation cache size
 heroku config:set VIPS_CACHE_MAX_OPS=500
 
 # Tune memory usage
@@ -187,7 +187,7 @@ The buildpack automatically detects the architecture and uses the appropriate bi
 Clone the repository and build for specific stacks:
 
 ```bash
-git clone https://github.com/mariochavez/heroku-buildpack-libvips
+git clone https://github.com/Flytedesk/heroku-buildpack-libvips
 cd heroku-buildpack-libvips
 
 # Build for all supported stacks
@@ -255,7 +255,7 @@ docker run -it libvips-dev bash
 
 ### Getting Help
 
-1. **Check the [releases page](https://github.com/mariochavez/heroku-buildpack-libvips/releases)** for pre-built binaries
+1. **Check the [releases page](https://github.com/Flytedesk/heroku-buildpack-libvips/releases)** for pre-built binaries
 2. **Review build logs** for specific error messages
 3. **Open an issue** with your stack version, architecture, and error details
 4. **Check [libvips documentation](https://www.libvips.org/)** for format-specific questions

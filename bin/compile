@@ -57,7 +57,7 @@ arm64)
 esac
 
 # GitHub releases URL for pre-built binaries
-RELEASES_URL="https://github.com/mariochavez/heroku-buildpack-libvips/releases/download"
+RELEASES_URL="https://github.com/Flytedesk/heroku-buildpack-libvips/releases/download"
 
 function cached() {
 	if [[ ! -d $bundle ]]; then

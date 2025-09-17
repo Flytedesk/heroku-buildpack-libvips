@@ -85,7 +85,7 @@ echo '   • AVIF codec support included' && \\
 echo '   • Compatible with ruby-vips, pyvips, sharp' && \\
 echo && \\
 echo '📦 Deploy with:' && \\
-echo '   heroku buildpacks:add --index 1 https://github.com/mariochavez/heroku-buildpack-libvips' \\
+echo '   heroku buildpacks:add --index 1 https://github.com/Flytedesk/heroku-buildpack-libvips' \\
 "
 EOF
 
