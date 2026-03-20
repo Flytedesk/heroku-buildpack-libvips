@@ -288,7 +288,7 @@ if [ -f "$vendor/bin/vips" ]; then
 	fi
 
 	# Test HEIF support
-	if "$vendor/bin/vips" list | grep -q "heif"; then
+	if "$vendor/bin/vips" -l | grep -q "heif"; then
 		message "✓ HEIF support confirmed"
 	else
 		message "⚠ HEIF support not detected"
